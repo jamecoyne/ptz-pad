@@ -29,7 +29,7 @@ For hacking: `swift run` builds and launches it from the terminal, or open
 ## Release (signed + notarized DMG)
 
 ```bash
-./release.sh             # universal build → sign → DMG → notarize → staple → dist/PTZPad-1.0.dmg
+./release.sh             # universal build → sign → DMG → notarize → staple → dist/PTZPad-1.1.dmg
 ./release.sh --skip-notarize
 ```
 
