@@ -71,6 +71,30 @@ The release build is signed with `com.apple.security.cs.disable-library-validati
 the hardened runtime would otherwise refuse to load NDI's `libndi.dylib`, which is
 signed by NDI's team, not ours.
 
+## Finding the camera after a network move
+
+Under the Camera bar:
+
+- **Follow camera via NDI** (on by default). Once the camera answers VISCA at an IP
+  that also announces an NDI source, the app remembers that source's name. If the camera
+  later stops answering and the same name is announced at a different IP — new DHCP
+  lease, different venue — the VISCA host switches there automatically and the log says
+  so. NDI discovery is mDNS, so this works anywhere on the same network, not across
+  routers. **Forget** clears the remembered name.
+- **Subnet warning.** If the camera's IP isn't on any of this Mac's networks (a fixed
+  address from another network), an orange box says so and gives the fixes. The best fix
+  is to set the camera to DHCP. Until then, the box offers a copyable
+  `sudo ifconfig en0 alias …` command that gives the Mac a second address on the camera's
+  subnet, plus the command to remove it.
+- **Scan network** sends a VISCA position inquiry to every address on this Mac's
+  networks (limited to the Mac's own /24 on networks bigger than a /22) and lists what
+  answers, labelled with its NDI name if it has one. **Use** points the app at it.
+  Takes about 3 seconds. Works with NDI switched off on the camera.
+
+Nothing can search *every* subnet: discovery doesn't cross routers, and the private
+address ranges hold about 17 million addresses. Setting the camera to DHCP, or carrying
+a small travel router that always uses the same subnet, avoids the problem entirely.
+
 ## Controller mapping
 
 | Control | Action |

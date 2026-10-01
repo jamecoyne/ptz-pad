@@ -50,6 +50,9 @@ struct ContentView: View {
             if let err = camera.socketError {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
+            CameraFinderView()
+                .padding(.horizontal, 6)
+                .padding(.bottom, 4)
         }
     }
 

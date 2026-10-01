@@ -89,6 +89,7 @@ final class CameraController: ObservableObject {
     // MARK: Connection
 
     func connect() {
+        lastReplyAt = .distantPast      // replies from a previous host don't count
         visca.connect(host: host, port: UInt16(clamping: port))
         pollTimer?.invalidate()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.pollPosition() }
@@ -108,10 +109,12 @@ final class CameraController: ObservableObject {
     }
 
     private func pollPosition() {
+        // Before the guard: a socket that never becomes ready must still read as "not responding".
+        let responding = Date().timeIntervalSince(lastReplyAt) < 2.0
+        if responding != cameraResponding { cameraResponding = responding }
         guard socketReady else { return }
         visca.send(Visca.panTiltPosInq)
         visca.send(Visca.zoomPosInq)
-        cameraResponding = Date().timeIntervalSince(lastReplyAt) < 2.0
     }
 
     // MARK: Commands
@@ -253,7 +256,7 @@ final class CameraController: ObservableObject {
 
     // MARK: Log
 
-    private func appendLog(_ line: String) {
+    func appendLog(_ line: String) {
         let stamped = "\(timeFormatter.string(from: Date()))  \(line)"
         log.append(stamped)
         if log.count > 200 { log.removeFirst(log.count - 200) }
