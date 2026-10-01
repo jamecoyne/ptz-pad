@@ -10,7 +10,7 @@ struct PTZPadApp: App {
             ContentView()
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 700, height: 820)
+        .defaultSize(width: 800, height: 1000)
     }
 }
 
@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         CameraController.shared.start()
+        VideoController.shared.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -27,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Never leave the camera driving.
         CameraController.shared.stopAll()
+        VideoController.shared.shutdown()
         Thread.sleep(forTimeInterval: 0.15)
     }
 }

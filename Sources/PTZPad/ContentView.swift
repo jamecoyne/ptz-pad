@@ -8,6 +8,7 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 connectionBar
+                VideoPanel()
                 HStack(alignment: .top, spacing: 14) {
                     ControllerPanel(pad: camera.pad, camera: camera)
                     positionPanel
@@ -19,7 +20,7 @@ struct ContentView: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 680, minHeight: 720)
+        .frame(minWidth: 760, minHeight: 720)
     }
 
     // MARK: Sections
