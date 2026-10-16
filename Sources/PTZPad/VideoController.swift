@@ -59,11 +59,18 @@ private struct RenderSettings {
     var showLabels = true
     var saveFaces = false
     var saveInterval: TimeInterval = 2
+    var faceOverlay = false
+    var blueBackground = false
+    var windowTrail = false
+    var faceFill = false
+    var trailLimit = 100
 
     /// What Vision has to look for: the boxes that are drawn, plus faces while saving them.
     var vision: DetectionSettings {
         var v = detection
-        if saveFaces { v.face = true }
+        if saveFaces || faceOverlay { v.face = true }
+        if blueBackground || windowTrail { v.face = true; v.body = true; v.eyes = true }
+        if faceFill { v.face = true }
         return v
     }
 }
@@ -87,6 +94,11 @@ final class VideoController: ObservableObject {
     @Published var detectMouths: Bool { didSet { defaults.set(detectMouths, forKey: "detectMouths"); pushSettings() } }
     @Published var showLabels: Bool { didSet { defaults.set(showLabels, forKey: "showLabels"); pushSettings() } }
     @Published var saveFaces: Bool { didSet { defaults.set(saveFaces, forKey: "saveFaces"); pushSettings() } }
+    @Published var faceFill: Bool { didSet { defaults.set(faceFill, forKey: "faceFill"); pushSettings() } }
+    @Published var windowTrail: Bool { didSet { defaults.set(windowTrail, forKey: "windowTrail"); pushSettings() } }
+    @Published var trailLimit: Int { didSet { defaults.set(trailLimit, forKey: "trailLimit"); pushSettings() } }
+    @Published var blueBackground: Bool { didSet { defaults.set(blueBackground, forKey: "blueBackground"); pushSettings() } }
+    @Published var faceOverlay: Bool { didSet { defaults.set(faceOverlay, forKey: "faceOverlay"); pushSettings(); reloadFaceLibrary() } }
     @Published var saveFaceInterval: Double { didSet { defaults.set(saveFaceInterval, forKey: "saveFaceInterval"); pushSettings() } }
     @Published var syphonEnabled: Bool { didSet { defaults.set(syphonEnabled, forKey: "syphonEnabled"); updateSyphon() } }
     @Published var syphonName: String { didSet { defaults.set(syphonName, forKey: "syphonName") } }
@@ -101,6 +113,8 @@ final class VideoController: ObservableObject {
     @Published private(set) var fps: Double = 0
     @Published private(set) var detectionCount = 0
     @Published private(set) var savedFaceCount = 0
+    @Published private(set) var libraryFaceCount = 0
+    @Published private(set) var trailWindowCount = 0
     @Published private(set) var faceSaveError: String?
     @Published private(set) var syphonClients = false
     @Published private(set) var ndiError: String?
@@ -157,6 +171,22 @@ final class VideoController: ObservableObject {
 
     // Face saving crops from a full-size copy of the frame Vision looked at.
     private lazy var faceSaver = FaceSaver(context: ciContext, colorSpace: sRGB)
+    private let faceLibrary = FaceLibrary()
+
+    // Window trail: render-thread only, fed once per detection pass.
+    private let trail = WindowTrail()
+    private let segmentPass = Atomic(0)
+    private var trailedPass = 0
+    private let trailClearRequested = Atomic(false)
+    private let trailSize = Atomic(0)
+
+    // Face fill: render-thread only. The last faces seen are held briefly so a pass that
+    // misses doesn't flash the whole frame.
+    private var heldFaces: [NormRect] = []
+    private var heldUntil: CFTimeInterval = 0
+    private let strobeInterval: CFTimeInterval = 0.2
+    private let faceHold: CFTimeInterval = 1
+    private var ticks = 0
     private var facePool: CVPixelBufferPool?
     private var faceSize = CGSize.zero
 
@@ -174,6 +204,11 @@ final class VideoController: ObservableObject {
         detectMouths = defaults.object(forKey: "detectMouths") as? Bool ?? false
         showLabels = defaults.object(forKey: "showLabels") as? Bool ?? true
         saveFaces = defaults.bool(forKey: "saveFaces")
+        faceOverlay = defaults.bool(forKey: "faceOverlay")
+        blueBackground = defaults.bool(forKey: "blueBackground")
+        windowTrail = defaults.bool(forKey: "windowTrail")
+        faceFill = defaults.bool(forKey: "faceFill")
+        trailLimit = defaults.object(forKey: "trailLimit") as? Int ?? 100
         saveFaceInterval = defaults.object(forKey: "saveFaceInterval") as? Double ?? 2
         syphonEnabled = defaults.object(forKey: "syphonEnabled") as? Bool ?? true
         syphonName = defaults.string(forKey: "syphonName") ?? "Camera"
@@ -209,6 +244,12 @@ final class VideoController: ObservableObject {
         syphon.stop()
     }
 
+    private func reloadFaceLibrary() {
+        if faceOverlay { faceLibrary.reload(from: FaceSaver.rootFolder) }
+    }
+
+    func clearTrail() { trailClearRequested.value = true }
+
     func revealSavedFaces() {
         let folder = FaceSaver.rootFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -229,6 +270,10 @@ final class VideoController: ObservableObject {
         let drawn = currentSettings().detection
         detectionCount = latestSegments.value.filter { drawn.includes($0.kind) }.count
         savedFaceCount = faceSaver.savedCount
+        libraryFaceCount = faceLibrary.count
+        trailWindowCount = trailSize.value
+        ticks += 1
+        if faceOverlay, ticks % 3 == 0 { reloadFaceLibrary() }
         faceSaveError = faceSaver.lastError
         updateTestVideo()
         if let error = testPlayer?.error { testVideoError = error }
@@ -242,7 +287,9 @@ final class VideoController: ObservableObject {
             detection: detectionEnabled
                 ? DetectionSettings(face: detectFaces, body: detectBodies, eyes: detectEyes, mouth: detectMouths)
                 : DetectionSettings(face: false, body: false, eyes: false, mouth: false),
-            showLabels: showLabels, saveFaces: saveFaces, saveInterval: saveFaceInterval)
+            showLabels: showLabels, saveFaces: saveFaces, saveInterval: saveFaceInterval,
+            faceOverlay: faceOverlay, blueBackground: blueBackground,
+            windowTrail: windowTrail, faceFill: faceFill, trailLimit: trailLimit)
         settingsLock.lock()
         renderSettings = s
         settingsLock.unlock()
@@ -386,6 +433,24 @@ final class VideoController: ObservableObject {
         }
 
         image = apply(s.effect, amount: s.amount, to: image, extent: extent).cropped(to: extent)
+        // Face fill takes over the whole frame, so the frame-wide looks and the overlays
+        // that sit on face positions are skipped while it's showing a face.
+        var filled = false
+        if s.faceFill, let zoomed = fillWithFace(image, extent: extent) {
+            image = zoomed
+            filled = true
+        }
+        if filled {
+            if trail.count > 0 { trail.clear(); trailSize.value = 0 }
+        } else if s.windowTrail {
+            updateTrail(from: image, extent: extent, limit: s.trailLimit)
+            image = VideoController.blue.cropped(to: extent)       // the windows are drawn after
+        } else {
+            if trail.count > 0 { trail.clear(); trailSize.value = 0 }
+            if s.blueBackground {
+                image = cutOut(image, keeping: latestSegments.value, extent: extent)
+            }
+        }
 
         guard let output = outputBuffer(width: width, height: height) else { return }
         render(image, to: output)
@@ -393,7 +458,15 @@ final class VideoController: ObservableObject {
         CVPixelBufferLockBaseAddress(output, [])
         if let base = CVPixelBufferGetBaseAddress(output) {
             let bytesPerRow = CVPixelBufferGetBytesPerRow(output)
-            if s.detection.any {
+            if !filled, s.windowTrail, trail.count > 0,
+               let ctx = bitmapContext(base, width: width, height: height, stride: bytesPerRow) {
+                trail.draw(in: ctx)
+            }
+            if !filled, s.faceOverlay {
+                pasteFaces(latestSegments.value.filter { $0.kind == .face }, into: base,
+                           width: width, height: height, stride: bytesPerRow)
+            }
+            if !filled, s.detection.any {
                 drawBoxes(latestSegments.value.filter { s.detection.includes($0.kind) }, into: base, width: width, height: height,
                           stride: bytesPerRow, labels: s.showLabels)
             }
@@ -518,6 +591,82 @@ final class VideoController: ObservableObject {
         }
     }
 
+    // MARK: Blue background
+
+    private static let blue = CIImage(color: CIColor(red: 0, green: 0, blue: 1))
+
+    /// Keeps the picture only inside face, body and eye boxes; everything else is solid
+    /// #0000FF. Nothing detected means an all-blue frame.
+    private func cutOut(_ image: CIImage, keeping segments: [Segment], extent: CGRect) -> CIImage {
+        let W = extent.width, H = extent.height
+        // Union of the boxes as a white-on-transparent mask; NormRect is y-down, CI is y-up.
+        var mask = CIImage.empty()
+        for segment in segments where segment.kind != .mouth {
+            let r = segment.rect
+            let rect = CGRect(x: r.x * W, y: (1 - r.y - r.h) * H, width: r.w * W, height: r.h * H).integral
+            mask = CIImage(color: .white).cropped(to: rect).composited(over: mask)
+        }
+        return image.applyingFilter("CIBlendWithAlphaMask", parameters: [
+            kCIInputBackgroundImageKey: VideoController.blue.cropped(to: extent),
+            kCIInputMaskImageKey: mask,
+        ]).cropped(to: extent)
+    }
+
+    // MARK: Face fill
+
+    /// One detected face blown up to fill the frame; with several, a different one every
+    /// 200 ms, left to right. Nil when there's no face to show.
+    private func fillWithFace(_ image: CIImage, extent: CGRect) -> CIImage? {
+        let now = CACurrentMediaTime()
+        let faces = latestSegments.value.filter { $0.kind == .face }.map(\.rect).sorted { $0.x < $1.x }
+        if !faces.isEmpty {
+            heldFaces = faces
+            heldUntil = now + faceHold
+        } else if now > heldUntil {
+            heldFaces = []
+        }
+        guard !heldFaces.isEmpty else { return nil }
+        let face = heldFaces[Int(now / strobeInterval) % heldFaces.count]
+
+        // The face with some head around it, widened to the frame's shape so nothing is
+        // stretched, then slid back inside the frame.
+        let W = extent.width, H = extent.height
+        let r = face.padded(by: 0.25)
+        var rect = CGRect(x: r.x * W, y: (1 - r.y - r.h) * H, width: r.w * W, height: r.h * H)
+        let aspect = W / H
+        if rect.width / rect.height < aspect {
+            rect = rect.insetBy(dx: -(rect.height * aspect - rect.width) / 2, dy: 0)
+        } else {
+            rect = rect.insetBy(dx: 0, dy: -(rect.width / aspect - rect.height) / 2)
+        }
+        rect.origin.x = min(max(0, rect.minX), max(0, W - rect.width))
+        rect.origin.y = min(max(0, rect.minY), max(0, H - rect.height))
+        guard rect.width > 1, rect.height > 1 else { return nil }
+
+        let scale = W / rect.width
+        return image.cropped(to: rect)
+            .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY)
+                .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
+            .cropped(to: extent)
+    }
+
+    // MARK: Window trail
+
+    /// One new window per segment of each new detection pass, cut from this frame.
+    private func updateTrail(from image: CIImage, extent: CGRect, limit: Int) {
+        if trailClearRequested.value {
+            trailClearRequested.value = false
+            trail.clear()
+        }
+        let pass = segmentPass.value
+        if pass != trailedPass {
+            trailedPass = pass
+            trail.add(latestSegments.value.filter { $0.kind != .mouth }, from: image, extent: extent,
+                      context: ciContext, colorSpace: sRGB, limit: limit)
+        }
+        trailSize.value = trail.count
+    }
+
     // MARK: Detection
 
     private func detect(_ image: CIImage, extent: CGRect, settings s: RenderSettings) {
@@ -556,7 +705,10 @@ final class VideoController: ObservableObject {
             let found = detector.segments(in: small, settings: s.vision)
             // A pass that finishes after detection was switched off must not bring boxes back.
             let now = currentSettings()
-            if now.vision.any { latestSegments.value = found }
+            if now.vision.any {
+                latestSegments.value = found
+                segmentPass.value += 1
+            }
             if let full, now.saveFaces { faceSaver.save(found, from: full, interval: now.saveInterval) }
             visionBusy.value = false
         }
@@ -565,14 +717,34 @@ final class VideoController: ObservableObject {
     private static let green = CGColor(srgbRed: 0.25, green: 1, blue: 0.4, alpha: 1)
 
     /// segcam's windowed-mode look: a green box per segment with its ID on a green chip.
+    private func bitmapContext(_ base: UnsafeMutableRawPointer, width: Int, height: Int, stride: Int) -> CGContext? {
+        CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
+                  bytesPerRow: stride, space: sRGB,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+    }
+
+    /// Face swap: a random saved crop over every detected face, re-picked every frame,
+    /// pasted as a hard-edged rectangle.
+    private func pasteFaces(_ faces: [Segment], into base: UnsafeMutableRawPointer,
+                            width: Int, height: Int, stride: Int) {
+        guard !faces.isEmpty, faceLibrary.count > 0,
+              let ctx = bitmapContext(base, width: width, height: height, stride: stride) else { return }
+        let W = CGFloat(width), H = CGFloat(height)
+        ctx.interpolationQuality = .medium
+        for face in faces {
+            guard let image = faceLibrary.random() else { break }
+            // Saved crops carry 25% padding around the face; match it so features line up.
+            let r = face.rect.padded(by: 0.25)
+            let rect = CGRect(x: r.x * W, y: H - (r.y + r.h) * H, width: r.w * W, height: r.h * H)
+            guard rect.width > 4, rect.height > 4 else { continue }
+            ctx.draw(image, in: rect)
+        }
+    }
+
     private func drawBoxes(_ segments: [Segment], into base: UnsafeMutableRawPointer,
                            width: Int, height: Int, stride: Int, labels: Bool) {
         guard !segments.isEmpty,
-              let ctx = CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
-                                  bytesPerRow: stride, space: sRGB,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-                                      | CGBitmapInfo.byteOrder32Little.rawValue)
-        else { return }
+              let ctx = bitmapContext(base, width: width, height: height, stride: stride) else { return }
 
         // Memory row 0 is the top of the picture and CG's y runs up, so flip NormRect's y.
         let W = CGFloat(width), H = CGFloat(height)

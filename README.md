@@ -65,6 +65,25 @@ IP automatically. Each frame then goes through:
    detection even with the boxes off. Since nothing is tracked, the same person is saved
    again on every interval (1–30 s, picked next to the toggle); faces under 48 px are
    skipped. macOS asks once for access to the Desktop folder.
+5. **Blue background** — keeps the picture only inside face, body and eye boxes (hard
+   rectangles, after the effect) and fills everything else with solid `#0000FF`. It runs
+   that detection itself, whatever the box checkboxes say; with nothing found the frame
+   is all blue.
+6. **Window trail** (ported from segcam's windowed mode) — every face, body and eye of
+   each detection pass becomes a window frozen on that moment's picture (no title bars),
+   piled on the blue background newest on top.
+   Since every pass gets fresh numbers, windows keep coming and leave a trail; the oldest
+   is recycled once the pile holds 25–400 (100 by default). **Clear** empties it.
+7. **Face fill** — the detected face (with some head around it, widened to the frame's
+   shape) fills the whole frame. With several faces it strobes between them left to
+   right, a new one every 200 ms. The last faces are held for a second so a missed pass
+   doesn't flash the full picture; with no face the other looks show as usual, and
+   while a face fills the frame the trail, blue background, pasted faces and boxes are
+   off.
+8. **Paste saved faces over faces** — a face swap: every detected face gets a random
+   crop from that folder (the 500 most recent, rescanned every few seconds), re-picked
+   every frame and pasted as a hard-edged rectangle. It's drawn on the output only, so
+   saved crops never contain pasted faces.
 
 **Test video when the camera is unavailable** (on by default): once no NDI frames have
 arrived for 2 s, the panel loops a movie through the same pipeline — detection, face

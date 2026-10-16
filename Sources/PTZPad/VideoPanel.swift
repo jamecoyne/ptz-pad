@@ -137,6 +137,41 @@ struct VideoPanel: View {
                     .disabled(video.effect == .none)
                 Text("\(Int(video.effectAmount * 100))%").monospacedDigit().frame(width: 44, alignment: .trailing)
             }
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                Toggle("Blue background (faces, bodies, eyes only)", isOn: $video.blueBackground)
+                    .toggleStyle(.checkbox)
+                    .gridCellColumns(2)
+            }
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                Toggle("Face fill (strobes between faces every 200 ms)", isOn: $video.faceFill)
+                    .toggleStyle(.checkbox)
+                    .gridCellColumns(2)
+            }
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                Toggle("Window trail", isOn: $video.windowTrail)
+                    .toggleStyle(.checkbox)
+                    .gridCellColumns(2)
+            }
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                HStack(spacing: 8) {
+                    Picker("Keep", selection: $video.trailLimit) {
+                        ForEach([25, 50, 100, 200, 400], id: \.self) { Text("\($0) windows").tag($0) }
+                    }
+                    .fixedSize()
+                    Button("Clear") { video.clearTrail() }
+                        .controlSize(.small)
+                    Spacer()
+                    if video.windowTrail {
+                        Text("\(video.trailWindowCount) up").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!video.windowTrail)
+                .gridCellColumns(2)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -188,6 +223,14 @@ struct VideoPanel: View {
                 Spacer()
                 Button("Show folder") { video.revealSavedFaces() }
                     .controlSize(.small)
+            }
+            HStack {
+                Toggle("Paste saved faces over faces", isOn: $video.faceOverlay).toggleStyle(.checkbox)
+                Spacer()
+                if video.faceOverlay {
+                    Text(video.libraryFaceCount == 0 ? "no saved faces" : "\(video.libraryFaceCount) in library")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             if let error = video.faceSaveError {
                 Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
