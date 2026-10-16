@@ -8,6 +8,7 @@ struct VideoPanel: View {
         GroupBox("Video") {
             VStack(alignment: .leading, spacing: 10) {
                 sourceBar
+                testVideoBar
                 VideoPreview(layer: video.previewLayer)
                     .aspectRatio(aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
@@ -26,6 +27,8 @@ struct VideoPanel: View {
                     VStack(alignment: .leading, spacing: 10) {
                         detectionControls
                         Divider()
+                        faceSaveControls
+                        Divider()
                         syphonControls
                     }
                     .frame(width: 250, alignment: .leading)
@@ -41,10 +44,36 @@ struct VideoPanel: View {
     }
 
     private var placeholder: String {
+        if video.usingTestVideo { return video.testVideoError ?? "Starting test video…" }
         if let err = video.ndiError { return err }
         if video.connectedSource != nil { return "Waiting for video…" }
         if video.sources.isEmpty { return "Looking for NDI sources…" }
         return "Pick an NDI source"
+    }
+
+    private var testVideoBar: some View {
+        HStack(spacing: 8) {
+            Toggle("Test video when the camera is unavailable", isOn: $video.testVideoEnabled)
+                .toggleStyle(.checkbox)
+            Text(video.testVideoPath.isEmpty ? "No file" : (video.testVideoPath as NSString).lastPathComponent)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(video.testVideoPath)
+            Button("Choose…") { video.chooseTestVideo() }
+                .controlSize(.small)
+            Spacer()
+            if let error = video.testVideoError {
+                Text(error).font(.caption).foregroundStyle(.red).lineLimit(1)
+            } else if video.usingTestVideo {
+                Text("PLAYING TEST VIDEO")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.85), in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundStyle(.black)
+            }
+        }
     }
 
     private var sourceBar: some View {
@@ -134,6 +163,35 @@ struct VideoPanel: View {
             }
             .toggleStyle(.checkbox)
             .disabled(!video.detectionEnabled)
+        }
+    }
+
+    private var faceSaveControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Toggle("Save faces to Desktop", isOn: $video.saveFaces).toggleStyle(.checkbox)
+                Spacer()
+                if video.savedFaceCount > 0 {
+                    Text("\(video.savedFaceCount) saved").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 6) {
+                Picker("Every", selection: $video.saveFaceInterval) {
+                    Text("1 s").tag(1.0)
+                    Text("2 s").tag(2.0)
+                    Text("5 s").tag(5.0)
+                    Text("10 s").tag(10.0)
+                    Text("30 s").tag(30.0)
+                }
+                .fixedSize()
+                .disabled(!video.saveFaces)
+                Spacer()
+                Button("Show folder") { video.revealSavedFaces() }
+                    .controlSize(.small)
+            }
+            if let error = video.faceSaveError {
+                Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
+            }
         }
     }
 

@@ -59,6 +59,20 @@ IP automatically. Each frame then goes through:
    eyes and mouths switch separately. Detection looks at the adjusted picture *before*
    the effect, on a 960-wide copy on its own queue, so it never stalls the video. Like
    segcam, nothing is tracked: each pass gets fresh numbers.
+4. **Save faces to Desktop** — crops each detected face (padded, from the full-size
+   adjusted picture, no effect or boxes) and writes it as a JPEG to
+   `~/Desktop/PTZ Pad Faces/<yyyy-MM-dd>/HH-mm-ss.SSS_face-<n>.jpg`. It runs face
+   detection even with the boxes off. Since nothing is tracked, the same person is saved
+   again on every interval (1–30 s, picked next to the toggle); faces under 48 px are
+   skipped. macOS asks once for access to the Desktop folder.
+
+**Test video when the camera is unavailable** (on by default): once no NDI frames have
+arrived for 2 s, the panel loops a movie through the same pipeline — detection, face
+saving and Syphon all work on it — and an orange PLAYING TEST VIDEO badge shows. It stops
+as soon as camera frames come back. The default file is `crowd sample.mov` at the top of
+this repo, found from the source path at build time, so it only works for builds made on
+this machine; it isn't copied into the app (it's 640 MB). Use **Choose…** for any other
+movie.
 
 The preview shows exactly the frame that goes out over **Syphon** (server name
 "Camera" by default — in Resolume it appears under Sources › Syphon as

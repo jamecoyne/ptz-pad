@@ -4,3 +4,6 @@ build/
 .swiftpm/
 dist/
 .DS_Store
+
+# Local test clip (640 MB) — read in place by the test-video fallback
+crowd sample.mov

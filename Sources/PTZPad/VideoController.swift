@@ -5,6 +5,7 @@ import CoreText
 import CoreVideo
 import Foundation
 import QuartzCore
+import UniformTypeIdentifiers
 
 enum VideoEffect: String, CaseIterable, Identifiable {
     case none, edges, edgeWork, sketch, comic, posterize, pixelate, halftone,
@@ -56,6 +57,15 @@ private struct RenderSettings {
     var amount = 0.5
     var detection = DetectionSettings()
     var showLabels = true
+    var saveFaces = false
+    var saveInterval: TimeInterval = 2
+
+    /// What Vision has to look for: the boxes that are drawn, plus faces while saving them.
+    var vision: DetectionSettings {
+        var v = detection
+        if saveFaces { v.face = true }
+        return v
+    }
 }
 
 /// The camera's NDI feed: picture adjustments, a creative effect, segcam-style detection
@@ -76,8 +86,12 @@ final class VideoController: ObservableObject {
     @Published var detectEyes: Bool { didSet { defaults.set(detectEyes, forKey: "detectEyes"); pushSettings() } }
     @Published var detectMouths: Bool { didSet { defaults.set(detectMouths, forKey: "detectMouths"); pushSettings() } }
     @Published var showLabels: Bool { didSet { defaults.set(showLabels, forKey: "showLabels"); pushSettings() } }
+    @Published var saveFaces: Bool { didSet { defaults.set(saveFaces, forKey: "saveFaces"); pushSettings() } }
+    @Published var saveFaceInterval: Double { didSet { defaults.set(saveFaceInterval, forKey: "saveFaceInterval"); pushSettings() } }
     @Published var syphonEnabled: Bool { didSet { defaults.set(syphonEnabled, forKey: "syphonEnabled"); updateSyphon() } }
     @Published var syphonName: String { didSet { defaults.set(syphonName, forKey: "syphonName") } }
+    @Published var testVideoEnabled: Bool { didSet { defaults.set(testVideoEnabled, forKey: "testVideoEnabled"); updateTestVideo() } }
+    @Published var testVideoPath: String { didSet { defaults.set(testVideoPath, forKey: "testVideoPath"); restartTestVideo() } }
     @Published var syphonFlip: Bool { didSet { defaults.set(syphonFlip, forKey: "syphonFlip"); syphon.flipped = syphonFlip } }
 
     // MARK: Status
@@ -86,8 +100,12 @@ final class VideoController: ObservableObject {
     @Published private(set) var frameSize: CGSize?
     @Published private(set) var fps: Double = 0
     @Published private(set) var detectionCount = 0
+    @Published private(set) var savedFaceCount = 0
+    @Published private(set) var faceSaveError: String?
     @Published private(set) var syphonClients = false
     @Published private(set) var ndiError: String?
+    @Published private(set) var usingTestVideo = false
+    @Published private(set) var testVideoError: String?
 
     /// The preview shows whatever IOSurface was last rendered — the exact frame Syphon gets.
     let previewLayer: CALayer = {
@@ -102,8 +120,20 @@ final class VideoController: ObservableObject {
     private var receiver: NDIReceiver?
     private let syphon = SyphonPublisher()
     private var statusTimer: Timer?
+    private var testPlayer: TestVideoPlayer?
+    /// When the last NDI frame arrived; the test video only plays while this is stale.
+    private let lastNDIFrame = Atomic<CFAbsoluteTime>(0)
+    private let ndiTimeout: CFAbsoluteTime = 2
 
-    // Render-thread state.
+    /// The sample clip at the top of the repo — found from this file's build-time path, so
+    /// it works for builds made on this machine; anywhere else, pick a file instead.
+    static let bundledTestVideo = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("crowd sample.mov").path
+
+    // Render-thread state. NDI and the test video each have their own thread; the lock
+    // keeps them from rendering at once during a hand-over.
+    private let renderLock = NSLock()
     private let settingsLock = NSLock()
     private var renderSettings = RenderSettings()
     private let ciContext = CIContext(options: [
@@ -125,6 +155,11 @@ final class VideoController: ObservableObject {
     private let visionBusy = Atomic(false)
     private let latestSegments = Atomic<[Segment]>([])
 
+    // Face saving crops from a full-size copy of the frame Vision looked at.
+    private lazy var faceSaver = FaceSaver(context: ciContext, colorSpace: sRGB)
+    private var facePool: CVPixelBufferPool?
+    private var faceSize = CGSize.zero
+
     private init() {
         sourceName = defaults.string(forKey: "ndiSource") ?? ""
         brightness = defaults.object(forKey: "brightness") as? Double ?? 0
@@ -138,10 +173,14 @@ final class VideoController: ObservableObject {
         detectEyes = defaults.object(forKey: "detectEyes") as? Bool ?? true
         detectMouths = defaults.object(forKey: "detectMouths") as? Bool ?? false
         showLabels = defaults.object(forKey: "showLabels") as? Bool ?? true
+        saveFaces = defaults.bool(forKey: "saveFaces")
+        saveFaceInterval = defaults.object(forKey: "saveFaceInterval") as? Double ?? 2
         syphonEnabled = defaults.object(forKey: "syphonEnabled") as? Bool ?? true
         syphonName = defaults.string(forKey: "syphonName") ?? "Camera"
         // Resolume reads Syphon surfaces bottom-up (OpenGL rows), so flipped is what it wants.
         syphonFlip = defaults.object(forKey: "syphonFlip") as? Bool ?? true
+        testVideoEnabled = defaults.object(forKey: "testVideoEnabled") as? Bool ?? true
+        testVideoPath = defaults.string(forKey: "testVideoPath") ?? VideoController.bundledTestVideo
         syphon.flipped = syphonFlip
         pushSettings()
     }
@@ -165,8 +204,15 @@ final class VideoController: ObservableObject {
     func shutdown() {
         receiver?.stop()
         receiver = nil
+        stopTestVideo()
         finder.stop()
         syphon.stop()
+    }
+
+    func revealSavedFaces() {
+        let folder = FaceSaver.rootFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     func resetPicture() {
@@ -180,8 +226,13 @@ final class VideoController: ObservableObject {
         frameCounter.value = 0
         fps = Double(frames)
         syphonClients = syphon.hasClients
-        detectionCount = latestSegments.value.count
-        if frames == 0, connectedSource != nil { frameSize = nil }
+        let drawn = currentSettings().detection
+        detectionCount = latestSegments.value.filter { drawn.includes($0.kind) }.count
+        savedFaceCount = faceSaver.savedCount
+        faceSaveError = faceSaver.lastError
+        updateTestVideo()
+        if let error = testPlayer?.error { testVideoError = error }
+        if frames == 0, connectedSource != nil || usingTestVideo { frameSize = nil }
     }
 
     private func pushSettings() {
@@ -191,11 +242,11 @@ final class VideoController: ObservableObject {
             detection: detectionEnabled
                 ? DetectionSettings(face: detectFaces, body: detectBodies, eyes: detectEyes, mouth: detectMouths)
                 : DetectionSettings(face: false, body: false, eyes: false, mouth: false),
-            showLabels: showLabels)
+            showLabels: showLabels, saveFaces: saveFaces, saveInterval: saveFaceInterval)
         settingsLock.lock()
         renderSettings = s
         settingsLock.unlock()
-        if !s.detection.any { latestSegments.value = [] }
+        if !s.vision.any { latestSegments.value = [] }
     }
 
     private func currentSettings() -> RenderSettings {
@@ -227,11 +278,68 @@ final class VideoController: ObservableObject {
         guard !sourceName.isEmpty, let source = sources.first(where: { $0.name == sourceName }),
               let r = NDIReceiver(source: source) else { return }
         r.onFrame = { [weak self] data, w, h, stride in
-            self?.process(data: data, width: w, height: h, stride: stride)
+            guard let self else { return }
+            lastNDIFrame.value = CFAbsoluteTimeGetCurrent()
+            process(data: data, width: w, height: h, stride: stride)
         }
         r.start()
         receiver = r
         connectedSource = source
+    }
+
+    // MARK: Test video
+
+    private var ndiLive: Bool { CFAbsoluteTimeGetCurrent() - lastNDIFrame.value < ndiTimeout }
+
+    /// Plays the test video while it's switched on and the camera has sent nothing for a
+    /// couple of seconds; stops it as soon as NDI frames come back.
+    private func updateTestVideo() {
+        let want = testVideoEnabled && !ndiLive && !testVideoPath.isEmpty
+        if want, testPlayer == nil {
+            guard FileManager.default.fileExists(atPath: testVideoPath) else {
+                testVideoError = "Test video not found — choose a file"
+                return
+            }
+            testVideoError = nil
+            let player = TestVideoPlayer(url: URL(fileURLWithPath: testVideoPath))
+            player.onFrame = { [weak self] data, w, h, stride in
+                guard let self, !ndiLive else { return }
+                process(data: data, width: w, height: h, stride: stride)
+            }
+            player.start()
+            testPlayer = player
+            usingTestVideo = true
+            latestSegments.value = []
+        } else if !want, testPlayer != nil {
+            stopTestVideo()
+        }
+        if !testVideoEnabled { testVideoError = nil }
+    }
+
+    private func stopTestVideo() {
+        testPlayer?.stop()
+        testPlayer = nil
+        if usingTestVideo {
+            usingTestVideo = false
+            latestSegments.value = []
+        }
+    }
+
+    private func restartTestVideo() {
+        stopTestVideo()
+        updateTestVideo()
+    }
+
+    func chooseTestVideo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.allowsMultipleSelection = false
+        if !testVideoPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: testVideoPath).deletingLastPathComponent()
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            testVideoPath = url.path
+        }
     }
 
     private func updateSyphon() {
@@ -252,6 +360,7 @@ final class VideoController: ObservableObject {
     // MARK: Render thread
 
     private func process(data: UnsafeMutableRawPointer, width: Int, height: Int, stride: Int) {
+        renderLock.lock(); defer { renderLock.unlock() }
         // Wrap NDI's frame without copying; it is freed as soon as this returns, so every
         // render below is waited on.
         var wrapped: CVPixelBuffer?
@@ -272,8 +381,8 @@ final class VideoController: ObservableObject {
 
         // Detection looks at the adjusted picture but before the effect — edge detection
         // or a posterize would leave Vision nothing to find.
-        if s.detection.any, !visionBusy.value {
-            detect(image, extent: extent, settings: s.detection)
+        if s.vision.any, !visionBusy.value {
+            detect(image, extent: extent, settings: s)
         }
 
         image = apply(s.effect, amount: s.amount, to: image, extent: extent).cropped(to: extent)
@@ -285,7 +394,7 @@ final class VideoController: ObservableObject {
         if let base = CVPixelBufferGetBaseAddress(output) {
             let bytesPerRow = CVPixelBufferGetBytesPerRow(output)
             if s.detection.any {
-                drawBoxes(latestSegments.value, into: base, width: width, height: height,
+                drawBoxes(latestSegments.value.filter { s.detection.includes($0.kind) }, into: base, width: width, height: height,
                           stride: bytesPerRow, labels: s.showLabels)
             }
             syphon.publish(base: base, width: width, height: height, stride: bytesPerRow)
@@ -411,7 +520,7 @@ final class VideoController: ObservableObject {
 
     // MARK: Detection
 
-    private func detect(_ image: CIImage, extent: CGRect, settings: DetectionSettings) {
+    private func detect(_ image: CIImage, extent: CGRect, settings s: RenderSettings) {
         // Vision does as well at 960 wide as at full size, in a fraction of the time.
         let scale = min(1, 960 / extent.width)
         let w = Int((extent.width * scale).rounded()), h = Int((extent.height * scale).rounded())
@@ -426,12 +535,29 @@ final class VideoController: ObservableObject {
         guard let small else { return }
         render(image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)), to: small)
 
+        // The NDI frame is gone once process() returns, so a face save needs its own
+        // full-size copy — only made when a save is due, not every pass.
+        var full: CVPixelBuffer?
+        if s.saveFaces, faceSaver.isDue(interval: s.saveInterval) {
+            let width = Int(extent.width), height = Int(extent.height)
+            if facePool == nil || faceSize != extent.size {
+                facePool = makePool(width: width, height: height)
+                faceSize = extent.size
+            }
+            if let facePool {
+                CVPixelBufferPoolCreatePixelBuffer(nil, facePool, &full)
+                if let full { render(image, to: full) }
+            }
+        }
+
         visionBusy.value = true
         visionQueue.async { [weak self] in
             guard let self else { return }
-            let found = detector.segments(in: small, settings: settings)
+            let found = detector.segments(in: small, settings: s.vision)
             // A pass that finishes after detection was switched off must not bring boxes back.
-            if currentSettings().detection.any { latestSegments.value = found }
+            let now = currentSettings()
+            if now.vision.any { latestSegments.value = found }
+            if let full, now.saveFaces { faceSaver.save(found, from: full, interval: now.saveInterval) }
             visionBusy.value = false
         }
     }

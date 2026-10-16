@@ -81,6 +81,15 @@ struct DetectionSettings: Equatable {
     var mouth = false
 
     var any: Bool { face || body || eyes || mouth }
+
+    func includes(_ kind: SegmentKind) -> Bool {
+        switch kind {
+        case .face:               return face
+        case .body:               return body
+        case .eyeLeft, .eyeRight: return eyes
+        case .mouth:              return mouth
+        }
+    }
 }
 
 /// Like segcam, nothing is tracked between frames: every detection pass is a fresh set
