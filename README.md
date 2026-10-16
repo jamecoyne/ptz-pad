@@ -74,13 +74,18 @@ IP automatically. Each frame then goes through:
    piled on the blue background newest on top.
    Since every pass gets fresh numbers, windows keep coming and leave a trail; the oldest
    is recycled once the pile holds 25–400 (100 by default). **Clear** empties it.
-7. **Face fill** — the detected face (with some head around it, widened to the frame's
+7. **Censor** — big square pixels over every face and body box (about eight blocks
+   across, never finer than 6 px; faces get their own finer blocks on top of a body's).
+   It's applied after the effect and before face fill, the trail and the blue
+   background, so those carry the pixelation with them. Each box stays up for half a
+   second after the pass that found it, so a pass that misses a face doesn't uncover it.
+8. **Face fill** — the detected face (with some head around it, widened to the frame's
    shape) fills the whole frame. With several faces it strobes between them left to
    right, a new one every 200 ms. The last faces are held for a second so a missed pass
    doesn't flash the full picture; with no face the other looks show as usual, and
    while a face fills the frame the trail, blue background, pasted faces and boxes are
    off.
-8. **Paste saved faces over faces** — a face swap: every detected face gets a random
+9. **Paste saved faces over faces** — a face swap: every detected face gets a random
    crop from that folder (the 500 most recent, rescanned every few seconds), re-picked
    every frame and pasted as a hard-edged rectangle. It's drawn on the output only, so
    saved crops never contain pasted faces.

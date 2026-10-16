@@ -63,6 +63,7 @@ private struct RenderSettings {
     var blueBackground = false
     var windowTrail = false
     var faceFill = false
+    var censor = false
     var trailLimit = 100
 
     /// What Vision has to look for: the boxes that are drawn, plus faces while saving them.
@@ -71,6 +72,7 @@ private struct RenderSettings {
         if saveFaces || faceOverlay { v.face = true }
         if blueBackground || windowTrail { v.face = true; v.body = true; v.eyes = true }
         if faceFill { v.face = true }
+        if censor { v.face = true; v.body = true }
         return v
     }
 }
@@ -94,6 +96,7 @@ final class VideoController: ObservableObject {
     @Published var detectMouths: Bool { didSet { defaults.set(detectMouths, forKey: "detectMouths"); pushSettings() } }
     @Published var showLabels: Bool { didSet { defaults.set(showLabels, forKey: "showLabels"); pushSettings() } }
     @Published var saveFaces: Bool { didSet { defaults.set(saveFaces, forKey: "saveFaces"); pushSettings() } }
+    @Published var censor: Bool { didSet { defaults.set(censor, forKey: "censor"); pushSettings() } }
     @Published var faceFill: Bool { didSet { defaults.set(faceFill, forKey: "faceFill"); pushSettings() } }
     @Published var windowTrail: Bool { didSet { defaults.set(windowTrail, forKey: "windowTrail"); pushSettings() } }
     @Published var trailLimit: Int { didSet { defaults.set(trailLimit, forKey: "trailLimit"); pushSettings() } }
@@ -186,6 +189,12 @@ final class VideoController: ObservableObject {
     private var heldUntil: CFTimeInterval = 0
     private let strobeInterval: CFTimeInterval = 0.2
     private let faceHold: CFTimeInterval = 1
+
+    // Censor: render-thread only. Every box stays up for a while after its pass, so a
+    // pass that misses a face doesn't uncover it.
+    private var censorBoxes: [(segment: Segment, until: CFTimeInterval)] = []
+    private var censoredPass = 0
+    private let censorHold: CFTimeInterval = 0.5
     private var ticks = 0
     private var facePool: CVPixelBufferPool?
     private var faceSize = CGSize.zero
@@ -208,6 +217,7 @@ final class VideoController: ObservableObject {
         blueBackground = defaults.bool(forKey: "blueBackground")
         windowTrail = defaults.bool(forKey: "windowTrail")
         faceFill = defaults.bool(forKey: "faceFill")
+        censor = defaults.bool(forKey: "censor")
         trailLimit = defaults.object(forKey: "trailLimit") as? Int ?? 100
         saveFaceInterval = defaults.object(forKey: "saveFaceInterval") as? Double ?? 2
         syphonEnabled = defaults.object(forKey: "syphonEnabled") as? Bool ?? true
@@ -289,7 +299,7 @@ final class VideoController: ObservableObject {
                 : DetectionSettings(face: false, body: false, eyes: false, mouth: false),
             showLabels: showLabels, saveFaces: saveFaces, saveInterval: saveFaceInterval,
             faceOverlay: faceOverlay, blueBackground: blueBackground,
-            windowTrail: windowTrail, faceFill: faceFill, trailLimit: trailLimit)
+            windowTrail: windowTrail, faceFill: faceFill, censor: censor, trailLimit: trailLimit)
         settingsLock.lock()
         renderSettings = s
         settingsLock.unlock()
@@ -433,6 +443,13 @@ final class VideoController: ObservableObject {
         }
 
         image = apply(s.effect, amount: s.amount, to: image, extent: extent).cropped(to: extent)
+        // Censoring comes before the looks below, so face fill, the trail and the blue
+        // background all carry the pixelation with them.
+        if s.censor {
+            image = pixelate(image, segments: heldCensorBoxes(), extent: extent)
+        } else if !censorBoxes.isEmpty {
+            censorBoxes.removeAll()
+        }
         // Face fill takes over the whole frame, so the frame-wide looks and the overlays
         // that sit on face positions are skipped while it's showing a face.
         var filled = false
@@ -610,6 +627,44 @@ final class VideoController: ObservableObject {
             kCIInputBackgroundImageKey: VideoController.blue.cropped(to: extent),
             kCIInputMaskImageKey: mask,
         ]).cropped(to: extent)
+    }
+
+    // MARK: Censor
+
+    /// This pass's face and body boxes plus any from the last half second.
+    private func heldCensorBoxes() -> [Segment] {
+        let now = CACurrentMediaTime()
+        let pass = segmentPass.value
+        if pass != censoredPass {
+            censoredPass = pass
+            for segment in latestSegments.value where segment.kind == .face || segment.kind == .body {
+                censorBoxes.append((segment, now + censorHold))
+            }
+        }
+        censorBoxes.removeAll { $0.until < now }
+        return censorBoxes.map(\.segment)
+    }
+
+    /// Big square pixels over every face and body box. Bodies first, so a face inside a
+    /// body gets its own, finer blocks on top.
+    private func pixelate(_ image: CIImage, segments: [Segment], extent: CGRect) -> CIImage {
+        let W = extent.width, H = extent.height
+        let boxes = segments.filter { $0.kind == .body } + segments.filter { $0.kind == .face }
+        var out = image
+        for segment in boxes {
+            let r = segment.rect
+            let rect = CGRect(x: r.x * W, y: (1 - r.y - r.h) * H, width: r.w * W, height: r.h * H)
+                .integral.intersection(extent)
+            guard rect.width >= 2, rect.height >= 2 else { continue }
+            // About eight blocks across the shorter side, never finer than 6 px.
+            let block = max(6, min(rect.width, rect.height) / 8)
+            let blocks = image.clampedToExtent().applyingFilter("CIPixellate", parameters: [
+                kCIInputCenterKey: CIVector(x: rect.minX, y: rect.minY),     // grid starts at the box
+                kCIInputScaleKey: block,
+            ])
+            out = blocks.cropped(to: rect).composited(over: out)
+        }
+        return out.cropped(to: extent)
     }
 
     // MARK: Face fill

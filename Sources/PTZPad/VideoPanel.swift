@@ -145,6 +145,12 @@ struct VideoPanel: View {
             }
             GridRow {
                 Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                Toggle("Censor (pixelate faces and bodies)", isOn: $video.censor)
+                    .toggleStyle(.checkbox)
+                    .gridCellColumns(2)
+            }
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                 Toggle("Face fill (strobes between faces every 200 ms)", isOn: $video.faceFill)
                     .toggleStyle(.checkbox)
                     .gridCellColumns(2)
