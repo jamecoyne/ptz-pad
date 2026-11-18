@@ -2,6 +2,7 @@
 # Builds PTZPad in release mode and wraps it in a double-clickable .app bundle.
 set -euo pipefail
 cd "$(dirname "$0")"
+source ./version.env
 
 # Build outside this folder: it is iCloud-synced, and the compiler hangs on module-cache
 # files iCloud has evicted (same scratch path release.sh uses).
@@ -12,6 +13,7 @@ swift build -c release --scratch-path "$SCRATCH"
 # or OBS's universal build, same search order).
 SYPHON=""
 for candidate in \
+    ${SYPHON_FRAMEWORK_DIR:+"$SYPHON_FRAMEWORK_DIR/Syphon.framework"} \
     /Applications/TouchDesigner.app/Contents/Frameworks/Syphon.framework \
     /Applications/OBS.app/Contents/Frameworks/Syphon.framework \
     /Library/Frameworks/Syphon.framework; do
@@ -28,7 +30,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 cp "$SCRATCH/release/PTZPad" "$APP/Contents/MacOS/PTZPad"
 cp -R "$SYPHON" "$APP/Contents/Frameworks/"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -38,8 +40,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key><string>com.hackerperformance.ptzpad</string>
     <key>CFBundleExecutable</key><string>PTZPad</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleVersion</key><string>3</string>
-    <key>CFBundleShortVersionString</key><string>1.2</string>
+    <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSSupportsAutomaticTermination</key><false/>

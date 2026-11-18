@@ -6,7 +6,9 @@ import Foundation
 // build of it; compile and link against whichever is installed. make-app.sh and
 // release.sh copy the same framework into the app bundle, which is found first through
 // the @executable_path rpath; the second rpath only matters for `swift run`.
-let syphonCandidates = [
+// SYPHON_FRAMEWORK_DIR (set by release.sh, and by CI to a copy built by
+// scripts/build-syphon.sh) is searched first.
+let syphonCandidates = [ProcessInfo.processInfo.environment["SYPHON_FRAMEWORK_DIR"]].compactMap { $0 } + [
     "/Applications/TouchDesigner.app/Contents/Frameworks",
     "/Applications/OBS.app/Contents/Frameworks",
     "/Library/Frameworks",
