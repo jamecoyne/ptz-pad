@@ -6,6 +6,13 @@ It also previews the camera's NDI feed, runs it through picture adjustments, a
 creative effect and optional face/body/eye detection boxes, and republishes the
 result as a Syphon feed for Resolume, TouchDesigner or OBS.
 
+## Download
+
+**[Download the latest PTZ Pad for macOS (.dmg)](https://github.com/jamecoyne/ptz-pad/releases/latest)**,
+signed and notarized, for macOS 13 or later on Apple silicon and Intel. Open the DMG and
+drag PTZ Pad to Applications. To receive video, also install
+[NDI Tools](https://ndi.video/tools/).
+
 ## Build & run
 
 Needs the Xcode Command Line Tools (Swift 5.9+), plus:
