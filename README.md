@@ -28,43 +28,28 @@ For hacking: `swift run` builds and launches it from the terminal, or open
 
 ## Release (signed + notarized DMG)
 
-The version lives in `version.env`. To cut a release:
+Releases are built, signed and notarized on this Mac and uploaded to GitHub. The version
+lives in `version.env`.
 
 ```bash
 scripts/bump-version.sh 1.3          # edits version.env, commits "Bump version to 1.3 (build 4)", tags v1.3
-git push origin main v1.3            # the tag runs .github/workflows/release.yml
+git push origin main
+scripts/publish-release.sh           # ./release.sh, push the tag, draft GitHub release with the DMG + .sha256
 ```
 
-The workflow builds a universal binary on a GitHub macOS runner, signs it with the
-Developer ID certificate, packages the DMG, notarizes and staples it, and leaves a
-**draft** release with `PTZPad-1.3.dmg` and its `.sha256` — check it, then publish.
-It refuses to run if the tag doesn't match `version.env` or the secrets below are
-missing. Running it by hand (Actions → release → Run workflow) builds the DMG as a run
-artifact instead, ad-hoc signed if there are no secrets.
+Check the draft on GitHub and publish it (or pass `--publish` to skip the draft).
+`publish-release.sh` refuses to run with uncommitted changes, a branch that differs from
+GitHub, or a version that already has a release.
 
-Syphon isn't on the runner, and its SDK download is Intel-only and too old, so
-`scripts/build-syphon.sh` builds a pinned commit of it universal with Xcode.
+### CI test build
 
-### CI secrets
-
-Set once under Settings → Secrets and variables → Actions (or with `gh secret set`):
-
-| Secret | What |
-| --- | --- |
-| `MACOS_CERTIFICATES_P12` | base64 of the "Developer ID Application" certificate **and private key**, exported from Keychain Access as .p12 |
-| `MACOS_CERTIFICATES_PASSWORD` | the password chosen for that .p12 |
-| `APPLE_ID` | Apple ID email of the developer account |
-| `APPLE_TEAM_ID` | `CM9NHRF538` |
-| `APPLE_APP_PASSWORD` | an app-specific password from https://account.apple.com (Sign-In and Security) |
-
-```bash
-# Keychain Access → My Certificates → right-click "Developer ID Application: …" → Export… → DevID.p12
-base64 -i DevID.p12 | gh secret set MACOS_CERTIFICATES_P12
-gh secret set MACOS_CERTIFICATES_PASSWORD
-gh secret set APPLE_ID
-gh secret set APPLE_TEAM_ID --body CM9NHRF538
-gh secret set APPLE_APP_PASSWORD
-```
+`.github/workflows/build.yml` (Actions → build → Run workflow) builds the DMG on a
+GitHub macOS runner and keeps it as the run's artifact, ad-hoc signed. Syphon isn't on
+the runner, so `scripts/build-syphon.sh` builds a pinned commit of it universal with Xcode.
+It signs with Developer ID too if these optional repository secrets are set:
+`MACOS_CERTIFICATES_P12` (base64 .p12 of the certificate and key),
+`MACOS_CERTIFICATES_PASSWORD`, and for notarization `APPLE_ID`, `APPLE_TEAM_ID`,
+`APPLE_APP_PASSWORD`.
 
 ### Releasing from this Mac
 

@@ -11,11 +11,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Pinned so a release builds against the Syphon it was tested with. To update: pick a
-# commit from https://github.com/Syphon/Syphon-Framework/commits/main and check the app
-# still publishes to Resolume / TouchDesigner.
+# Pinned so a release builds against the Syphon it was tested with: the last commit
+# before 39e3138 renamed -copySurfaceForWidth:… (which SyphonPublisher calls, and which
+# TouchDesigner's and OBS's copies still have) to -newSurfaceForWidth:…. Moving past it
+# means switching SyphonPublisher to newSurface(forWidth:height:options:).
 SYPHON_REPO="https://github.com/Syphon/Syphon-Framework.git"
-SYPHON_COMMIT="f4761677a45b8034a3c2069ec0f3d2553da81fba"
+SYPHON_COMMIT="07b9f10b1ccc53a06fd3b17d6492f80640f4084f"
 MIN_OS="13.0"
 
 OUT="${1:-build/syphon}"

@@ -3,8 +3,7 @@
 #
 #   scripts/bump-version.sh 1.3      # → "Bump version to 1.3 (build 4)", tag v1.3
 #
-# Nothing is pushed. To release:  git push origin main v1.3
-# (the tag starts the release workflow, which leaves a draft GitHub release to publish).
+# Nothing is pushed. To release:  git push origin main && scripts/publish-release.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,4 +28,4 @@ git add version.env
 git commit -q -m "Bump version to $NEW (build $BUILD)"
 git tag -a "v$NEW" -m "PTZ Pad $NEW"
 echo "Committed and tagged v$NEW (build $BUILD). Release it with:"
-echo "  git push origin $(git branch --show-current) v$NEW"
+echo "  git push origin $(git branch --show-current) && scripts/publish-release.sh"

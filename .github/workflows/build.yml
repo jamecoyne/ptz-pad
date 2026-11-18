@@ -1,27 +1,22 @@
-name: release
+name: build
 
-# Builds, signs, notarizes and packages PTZ Pad on a GitHub macOS runner.
-# Pushing a version tag (v1.3, matching version.env) leaves a draft release with the DMG to
-# check and publish. Running it by hand (Actions → release → Run workflow) leaves the DMG
-# as the run's artifact; without the signing secrets that DMG is ad-hoc signed.
+# Test build on a GitHub macOS runner: universal binary, app bundle and DMG, left as the
+# run's artifact. Run it by hand (Actions → build → Run workflow). Releases are signed,
+# notarized and published from a Mac with scripts/publish-release.sh (README: Release).
+#
+# The DMG is ad-hoc signed unless the optional signing secrets are set, in which case it's
+# Developer ID signed (and notarized when the APPLE_* secrets are set too).
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  contents: read
 
 jobs:
   macos:
     runs-on: macos-latest
     timeout-minutes: 60
     env:
-      # README: Releases → CI secrets.
       MACOS_CERTIFICATES_P12: ${{ secrets.MACOS_CERTIFICATES_P12 }}
       MACOS_CERTIFICATES_PASSWORD: ${{ secrets.MACOS_CERTIFICATES_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -34,25 +29,7 @@ jobs:
         run: |
           source ./version.env
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match version.env ($VERSION). Bump with scripts/bump-version.sh."
-            exit 1
-          fi
           echo "Building $VERSION ($BUILD_NUMBER)"
-
-      # A tagged release must be signed and notarized; fail before the build if it can't be.
-      - name: Check signing secrets
-        if: github.ref_type == 'tag'
-        run: |
-          missing=""
-          for name in MACOS_CERTIFICATES_P12 MACOS_CERTIFICATES_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
-            [ -n "${!name}" ] || missing+=" $name"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing (README: Releases → CI secrets)"
-            exit 1
-          fi
 
       # Not on the runner: TouchDesigner/OBS aren't installed, and Syphon's SDK download is
       # Intel-only. scripts/build-syphon.sh builds the pinned commit universal.
@@ -61,8 +38,7 @@ jobs:
           scripts/build-syphon.sh "$RUNNER_TEMP/syphon"
           echo "SYPHON_FRAMEWORK_DIR=$RUNNER_TEMP/syphon" >> "$GITHUB_ENV"
 
-      # A throwaway keychain holding the Developer ID certificate and the notary credentials,
-      # searched by codesign and notarytool for the rest of the job.
+      # A throwaway keychain holding the Developer ID certificate and the notary credentials.
       - name: Signing keychain
         if: env.MACOS_CERTIFICATES_P12 != ''
         run: |
@@ -91,7 +67,7 @@ jobs:
             echo "NOTARY_PROFILE=PTZPad-Notary" >> "$GITHUB_ENV"
           fi
 
-      - name: Build, sign, notarize
+      - name: Build and sign
         run: |
           if [ -z "${SIGN_IDENTITY:-}" ]; then
             ./release.sh --ad-hoc
@@ -106,24 +82,6 @@ jobs:
           name: PTZPad-${{ env.VERSION }}
           path: dist/*
           if-no-files-found: error
-
-      - name: Draft release
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          dmg="dist/PTZPad-$VERSION.dmg"
-          sha="$(cut -d' ' -f1 "$dmg.sha256")"
-          {
-            echo "PTZ Pad $VERSION (build $BUILD_NUMBER) for macOS 13 or later, Apple silicon and Intel."
-            echo "Signed with Developer ID and notarized by Apple."
-            echo
-            echo "Needs [NDI Tools](https://ndi.video/tools/) installed to receive video."
-            echo
-            echo "SHA-256 \`$sha\`"
-          } > "$RUNNER_TEMP/notes.md"
-          gh release create "$GITHUB_REF_NAME" "$dmg" "$dmg.sha256" --repo "$GITHUB_REPOSITORY" \
-            --draft --title "PTZ Pad $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
 
       - name: Remove signing keychain
         if: always() && env.KEYCHAIN_PATH != ''
