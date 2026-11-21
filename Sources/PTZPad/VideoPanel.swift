@@ -139,7 +139,7 @@ struct VideoPanel: View {
             }
             GridRow {
                 Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                Toggle("Blue background (faces, bodies, eyes only)", isOn: $video.blueBackground)
+                Toggle("Black background (faces, bodies, eyes only)", isOn: $video.blueBackground)
                     .toggleStyle(.checkbox)
                     .gridCellColumns(2)
             }

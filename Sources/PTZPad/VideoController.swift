@@ -461,7 +461,7 @@ final class VideoController: ObservableObject {
             if trail.count > 0 { trail.clear(); trailSize.value = 0 }
         } else if s.windowTrail {
             updateTrail(from: image, extent: extent, limit: s.trailLimit)
-            image = VideoController.blue.cropped(to: extent)       // the windows are drawn after
+            image = VideoController.black.cropped(to: extent)       // the windows are drawn after
         } else {
             if trail.count > 0 { trail.clear(); trailSize.value = 0 }
             if s.blueBackground {
@@ -608,12 +608,12 @@ final class VideoController: ObservableObject {
         }
     }
 
-    // MARK: Blue background
+    // MARK: Black background
 
-    private static let blue = CIImage(color: CIColor(red: 0, green: 0, blue: 1))
+    private static let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0))
 
     /// Keeps the picture only inside face, body and eye boxes; everything else is solid
-    /// #0000FF. Nothing detected means an all-blue frame.
+    /// black. Nothing detected means an all-black frame.
     private func cutOut(_ image: CIImage, keeping segments: [Segment], extent: CGRect) -> CIImage {
         let W = extent.width, H = extent.height
         // Union of the boxes as a white-on-transparent mask; NormRect is y-down, CI is y-up.
@@ -624,7 +624,7 @@ final class VideoController: ObservableObject {
             mask = CIImage(color: .white).cropped(to: rect).composited(over: mask)
         }
         return image.applyingFilter("CIBlendWithAlphaMask", parameters: [
-            kCIInputBackgroundImageKey: VideoController.blue.cropped(to: extent),
+            kCIInputBackgroundImageKey: VideoController.black.cropped(to: extent),
             kCIInputMaskImageKey: mask,
         ]).cropped(to: extent)
     }
@@ -769,9 +769,9 @@ final class VideoController: ObservableObject {
         }
     }
 
-    private static let green = CGColor(srgbRed: 0.25, green: 1, blue: 0.4, alpha: 1)
+    private static let boxBlue = CGColor(srgbRed: 0.15, green: 0.45, blue: 1, alpha: 1)
 
-    /// segcam's windowed-mode look: a green box per segment with its ID on a green chip.
+    /// segcam's windowed-mode look, in blue: a box per segment with its ID on a blue chip.
     private func bitmapContext(_ base: UnsafeMutableRawPointer, width: Int, height: Int, stride: Int) -> CGContext? {
         CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
                   bytesPerRow: stride, space: sRGB,
@@ -805,8 +805,8 @@ final class VideoController: ObservableObject {
         let W = CGFloat(width), H = CGFloat(height)
         let line = max(2, (H / 360).rounded())
         let font = CTFontCreateWithName("Menlo-Bold" as CFString, max(10, H / 54), nil)
-        ctx.setStrokeColor(VideoController.green)
-        ctx.setFillColor(VideoController.green)
+        ctx.setStrokeColor(VideoController.boxBlue)
+        ctx.setFillColor(VideoController.boxBlue)
         ctx.setLineWidth(line)
 
         for segment in segments {
@@ -818,7 +818,7 @@ final class VideoController: ObservableObject {
             guard labels else { continue }
             let text = NSAttributedString(string: segment.label, attributes: [
                 NSAttributedString.Key(kCTFontAttributeName as String): font,
-                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor.black,
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor.white,
             ])
             let ctLine = CTLineCreateWithAttributedString(text)
             let bounds = CTLineGetBoundsWithOptions(ctLine, [])
@@ -826,7 +826,7 @@ final class VideoController: ObservableObject {
             var chip = CGRect(x: rect.minX - line, y: rect.maxY + line,
                               width: bounds.width + pad * 2, height: bounds.height + pad)
             if chip.maxY > H { chip.origin.y = rect.maxY - chip.height - line }   // box at the top edge
-            ctx.setFillColor(VideoController.green)
+            ctx.setFillColor(VideoController.boxBlue)
             ctx.fill(chip)
             ctx.textPosition = CGPoint(x: chip.minX + pad, y: chip.minY + pad / 2 - bounds.minY)
             CTLineDraw(ctLine, ctx)
