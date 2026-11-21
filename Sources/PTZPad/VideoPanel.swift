@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// NDI preview, picture adjustments, effect, detection and Syphon output.
+/// NDI preview, picture adjustments, effect, detection and Syphon or NDI output.
 struct VideoPanel: View {
     @ObservedObject var video = VideoController.shared
 
@@ -29,7 +29,7 @@ struct VideoPanel: View {
                         Divider()
                         faceSaveControls
                         Divider()
-                        syphonControls
+                        outputControls
                     }
                     .frame(width: 250, alignment: .leading)
                 }
@@ -244,22 +244,32 @@ struct VideoPanel: View {
         }
     }
 
-    private var syphonControls: some View {
+    private var outputControls: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Toggle("Syphon output", isOn: $video.syphonEnabled).toggleStyle(.checkbox)
+                Toggle("Output", isOn: $video.outputEnabled).toggleStyle(.checkbox)
                 Spacer()
-                if video.syphonEnabled {
-                    StatusDot(on: video.syphonClients, label: video.syphonClients ? "client" : "no client")
+                if video.outputEnabled, video.outputError == nil {
+                    StatusDot(on: video.outputClients, label: video.outputClients ? "client" : "no client")
                 }
             }
-            HStack(spacing: 6) {
-                TextField("Name", text: $video.syphonName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { video.applySyphonName() }
-                Toggle("Flip", isOn: $video.syphonFlip).toggleStyle(.checkbox)
+            Picker("Output", selection: $video.outputKind) {
+                ForEach(OutputKind.allCases) { Text($0.label).tag($0) }
             }
-            .disabled(!video.syphonEnabled)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            HStack(spacing: 6) {
+                TextField("Name", text: $video.outputName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { video.applyOutputName() }
+                if video.outputKind == .syphon {
+                    Toggle("Flip", isOn: $video.syphonFlip).toggleStyle(.checkbox)
+                }
+            }
+            if let error = video.outputError, video.outputEnabled {
+                Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
+            }
         }
+        .disabled(!video.outputEnabled)
     }
 }

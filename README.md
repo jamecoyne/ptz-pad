@@ -4,7 +4,8 @@ A small macOS app that drives the FoMaKo (Minrray) PTZ camera with an Xbox
 controller over Bluetooth. Talks raw VISCA over UDP (port 5678 on the camera).
 It also previews the camera's NDI feed, runs it through picture adjustments, a
 creative effect and optional face/body/eye detection boxes, and republishes the
-result as a Syphon feed for Resolume, TouchDesigner or OBS.
+result for Resolume, TouchDesigner or OBS — as a Syphon feed or as an NDI source, picked
+with the Syphon | NDI switch under Output.
 
 ## Download
 
@@ -23,7 +24,7 @@ Needs the Xcode Command Line Tools (Swift 5.9+), plus:
 - **The NDI runtime** to receive video — install [NDI Tools](https://ndi.video/tools/).
   `libndi.dylib` is loaded at run time (`/usr/local/lib`, `$NDI_RUNTIME_DIR_V6/V5`, NDI
   Tools' apps or Resolume's copy), so the app builds and runs without it, just with no
-  video.
+  video. NDI output uses the same runtime.
 
 ```bash
 ./make-app.sh            # release build → build/PTZPad.app

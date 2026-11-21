@@ -20,6 +20,11 @@ final class NDILibrary {
     let recvDestroy: NDIlib_recv_destroy_f?
     let recvCapture: NDIlib_recv_capture_v2_f?
     let recvFreeVideo: NDIlib_recv_free_video_v2_f?
+    let sendCreate: NDIlib_send_create_f?
+    let sendDestroy: NDIlib_send_destroy_f?
+    let sendVideo: NDIlib_send_send_video_v2_f?
+    let sendConnections: NDIlib_send_get_no_connections_f?
+    let sendSourceName: NDIlib_send_get_source_name_f?
 
     var isLoaded: Bool { recvCapture != nil }
 
@@ -60,6 +65,11 @@ final class NDILibrary {
         recvDestroy = sym("NDIlib_recv_destroy", NDIlib_recv_destroy_f.self)
         recvCapture = sym("NDIlib_recv_capture_v2", NDIlib_recv_capture_v2_f.self)
         recvFreeVideo = sym("NDIlib_recv_free_video_v2", NDIlib_recv_free_video_v2_f.self)
+        sendCreate = sym("NDIlib_send_create", NDIlib_send_create_f.self)
+        sendDestroy = sym("NDIlib_send_destroy", NDIlib_send_destroy_f.self)
+        sendVideo = sym("NDIlib_send_send_video_v2", NDIlib_send_send_video_v2_f.self)
+        sendConnections = sym("NDIlib_send_get_no_connections", NDIlib_send_get_no_connections_f.self)
+        sendSourceName = sym("NDIlib_send_get_source_name", NDIlib_send_get_source_name_f.self)
 
         if handle == nil {
             error = error ?? "NDI runtime not found — install NDI Tools (ndi.video/tools)"

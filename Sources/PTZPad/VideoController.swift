@@ -78,7 +78,7 @@ private struct RenderSettings {
 }
 
 /// The camera's NDI feed: picture adjustments, a creative effect, segcam-style detection
-/// boxes, then out to the preview and a Syphon server.
+/// boxes, then out to the preview and either a Syphon server or an NDI source.
 final class VideoController: ObservableObject {
     static let shared = VideoController()
 
@@ -103,8 +103,9 @@ final class VideoController: ObservableObject {
     @Published var blueBackground: Bool { didSet { defaults.set(blueBackground, forKey: "blueBackground"); pushSettings() } }
     @Published var faceOverlay: Bool { didSet { defaults.set(faceOverlay, forKey: "faceOverlay"); pushSettings(); reloadFaceLibrary() } }
     @Published var saveFaceInterval: Double { didSet { defaults.set(saveFaceInterval, forKey: "saveFaceInterval"); pushSettings() } }
-    @Published var syphonEnabled: Bool { didSet { defaults.set(syphonEnabled, forKey: "syphonEnabled"); updateSyphon() } }
-    @Published var syphonName: String { didSet { defaults.set(syphonName, forKey: "syphonName") } }
+    @Published var outputEnabled: Bool { didSet { defaults.set(outputEnabled, forKey: "outputEnabled"); updateOutput() } }
+    @Published var outputKind: OutputKind { didSet { defaults.set(outputKind.rawValue, forKey: "outputKind"); updateOutput() } }
+    @Published var outputName: String { didSet { defaults.set(outputName, forKey: "outputName") } }
     @Published var testVideoEnabled: Bool { didSet { defaults.set(testVideoEnabled, forKey: "testVideoEnabled"); updateTestVideo() } }
     @Published var testVideoPath: String { didSet { defaults.set(testVideoPath, forKey: "testVideoPath"); restartTestVideo() } }
     @Published var syphonFlip: Bool { didSet { defaults.set(syphonFlip, forKey: "syphonFlip"); syphon.flipped = syphonFlip } }
@@ -119,7 +120,8 @@ final class VideoController: ObservableObject {
     @Published private(set) var libraryFaceCount = 0
     @Published private(set) var trailWindowCount = 0
     @Published private(set) var faceSaveError: String?
-    @Published private(set) var syphonClients = false
+    @Published private(set) var outputClients = false
+    @Published private(set) var outputError: String?
     @Published private(set) var ndiError: String?
     @Published private(set) var usingTestVideo = false
     @Published private(set) var testVideoError: String?
@@ -136,6 +138,9 @@ final class VideoController: ObservableObject {
     private let finder = NDIFinder()
     private var receiver: NDIReceiver?
     private let syphon = SyphonPublisher()
+    private let ndiOut = NDIPublisher()
+    /// The output the render thread feeds; nil while output is off.
+    private let activeOutput = Atomic<VideoOutput?>(nil)
     private var statusTimer: Timer?
     private var testPlayer: TestVideoPlayer?
     /// When the last NDI frame arrived; the test video only plays while this is stale.
@@ -220,8 +225,11 @@ final class VideoController: ObservableObject {
         censor = defaults.bool(forKey: "censor")
         trailLimit = defaults.object(forKey: "trailLimit") as? Int ?? 100
         saveFaceInterval = defaults.object(forKey: "saveFaceInterval") as? Double ?? 2
-        syphonEnabled = defaults.object(forKey: "syphonEnabled") as? Bool ?? true
-        syphonName = defaults.string(forKey: "syphonName") ?? "Camera"
+        // Older versions only had Syphon, stored under syphonEnabled/syphonName.
+        outputEnabled = defaults.object(forKey: "outputEnabled") as? Bool
+            ?? defaults.object(forKey: "syphonEnabled") as? Bool ?? true
+        outputKind = OutputKind(rawValue: defaults.string(forKey: "outputKind") ?? "") ?? .syphon
+        outputName = defaults.string(forKey: "outputName") ?? defaults.string(forKey: "syphonName") ?? "Camera"
         // Resolume reads Syphon surfaces bottom-up (OpenGL rows), so flipped is what it wants.
         syphonFlip = defaults.object(forKey: "syphonFlip") as? Bool ?? true
         testVideoEnabled = defaults.object(forKey: "testVideoEnabled") as? Bool ?? true
@@ -236,11 +244,13 @@ final class VideoController: ObservableObject {
         ndiError = NDILibrary.shared.error
         finder.onChange = { [weak self] sources in
             guard let self else { return }
-            self.sources = sources
+            // Leave out our own NDI output, so it can't be picked as the input.
+            let own = self.ndiOut.sourceName
+            self.sources = sources.filter { $0.name != own }
             self.autoSelect()
         }
         finder.start()
-        updateSyphon()
+        updateOutput()
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         statusTimer = t
@@ -251,7 +261,9 @@ final class VideoController: ObservableObject {
         receiver = nil
         stopTestVideo()
         finder.stop()
+        activeOutput.value = nil
         syphon.stop()
+        ndiOut.stop()
     }
 
     private func reloadFaceLibrary() {
@@ -276,7 +288,7 @@ final class VideoController: ObservableObject {
         let frames = frameCounter.value
         frameCounter.value = 0
         fps = Double(frames)
-        syphonClients = syphon.hasClients
+        outputClients = activeOutput.value?.hasClients ?? false
         let drawn = currentSettings().detection
         detectionCount = latestSegments.value.filter { drawn.includes($0.kind) }.count
         savedFaceCount = faceSaver.savedCount
@@ -399,19 +411,41 @@ final class VideoController: ObservableObject {
         }
     }
 
-    private func updateSyphon() {
-        if syphonEnabled {
-            syphon.start(name: syphonName.isEmpty ? "Camera" : syphonName)
-        } else {
-            syphon.stop()
+    // MARK: Output
+
+    private func output(for kind: OutputKind) -> VideoOutput {
+        switch kind {
+        case .syphon: return syphon
+        case .ndi: return ndiOut
         }
     }
 
-    /// Restart the server under the new name.
-    func applySyphonName() {
-        guard syphonEnabled else { return }
-        syphon.stop()
-        updateSyphon()
+    /// Starts the selected output and stops the other. Called on the main thread; the
+    /// render thread picks up the change on its next frame.
+    private func updateOutput() {
+        let name = outputName.isEmpty ? "Camera" : outputName
+        for kind in OutputKind.allCases where !(outputEnabled && kind == outputKind) {
+            output(for: kind).stop()
+        }
+        guard outputEnabled else {
+            activeOutput.value = nil
+            outputError = nil
+            outputClients = false
+            return
+        }
+        let selected = output(for: outputKind)
+        selected.start(name: name)
+        activeOutput.value = selected.isRunning ? selected : nil
+        outputError = selected.isRunning ? nil : (outputKind == .ndi ? ndiOut.error : "Syphon server didn't start")
+        outputClients = selected.hasClients
+    }
+
+    /// Restart the output under the new name.
+    func applyOutputName() {
+        guard outputEnabled else { return }
+        activeOutput.value = nil
+        output(for: outputKind).stop()
+        updateOutput()
     }
 
     // MARK: Render thread
@@ -487,7 +521,7 @@ final class VideoController: ObservableObject {
                 drawBoxes(latestSegments.value.filter { s.detection.includes($0.kind) }, into: base, width: width, height: height,
                           stride: bytesPerRow, labels: s.showLabels)
             }
-            syphon.publish(base: base, width: width, height: height, stride: bytesPerRow)
+            activeOutput.value?.publish(base: base, width: width, height: height, stride: bytesPerRow)
         }
         CVPixelBufferUnlockBaseAddress(output, [])
 

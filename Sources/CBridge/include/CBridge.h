@@ -20,6 +20,7 @@
 
 typedef void *NDIlib_find_instance_t;
 typedef void *NDIlib_recv_instance_t;
+typedef void *NDIlib_send_instance_t;
 
 typedef struct NDIlib_source_t {
     const char *p_ndi_name;
@@ -58,6 +59,13 @@ typedef struct NDIlib_recv_create_v3_t {
     const char *p_ndi_recv_name;
 } NDIlib_recv_create_v3_t;
 
+typedef struct NDIlib_send_create_t {
+    const char *p_ndi_name;
+    const char *p_groups;
+    bool clock_video;
+    bool clock_audio;
+} NDIlib_send_create_t;
+
 typedef enum NDIlib_frame_type_e {
     NDIlib_frame_type_none = 0,
     NDIlib_frame_type_video = 1,
@@ -88,6 +96,9 @@ typedef struct NDIlib_video_frame_v2_t {
 static const uint32_t NDIlib_FourCC_type_BGRA = PTZ_NDI_FOURCC('B', 'G', 'R', 'A');
 static const uint32_t NDIlib_FourCC_type_BGRX = PTZ_NDI_FOURCC('B', 'G', 'R', 'X');
 
+static const int NDIlib_frame_format_type_progressive = 1;
+static const int64_t NDIlib_send_timecode_synthesize = INT64_MAX;
+
 typedef bool (*NDIlib_initialize_f)(void);
 typedef NDIlib_find_instance_t (*NDIlib_find_create_v2_f)(const NDIlib_find_create_t *);
 typedef void (*NDIlib_find_destroy_f)(NDIlib_find_instance_t);
@@ -98,3 +109,9 @@ typedef void (*NDIlib_recv_destroy_f)(NDIlib_recv_instance_t);
 typedef NDIlib_frame_type_e (*NDIlib_recv_capture_v2_f)(NDIlib_recv_instance_t, NDIlib_video_frame_v2_t *,
                                                         void *, void *, uint32_t);
 typedef void (*NDIlib_recv_free_video_v2_f)(NDIlib_recv_instance_t, const NDIlib_video_frame_v2_t *);
+typedef NDIlib_send_instance_t (*NDIlib_send_create_f)(const NDIlib_send_create_t *);
+typedef void (*NDIlib_send_destroy_f)(NDIlib_send_instance_t);
+// Synchronous: NDI has finished with the frame's pixels by the time it returns.
+typedef void (*NDIlib_send_send_video_v2_f)(NDIlib_send_instance_t, const NDIlib_video_frame_v2_t *);
+typedef int (*NDIlib_send_get_no_connections_f)(NDIlib_send_instance_t, uint32_t);
+typedef const NDIlib_source_t *(*NDIlib_send_get_source_name_f)(NDIlib_send_instance_t);
